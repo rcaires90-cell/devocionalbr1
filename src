@@ -1,1 +1,369 @@
 
+import { useState, useEffect, useRef, useCallback } from "react";
+
+/* ═══════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════ */
+const U = "devocionalbr1";
+const ROT = ["Versículo Dark","Motivacional","Reflexão Profunda","Versículo Dark","Curiosidade Bíblica","Mistério Bíblico","Série Noturna","Versículo Dark","Reflexão Profunda","Motivacional","Profecia","Versículo Dark","Curiosidade Bíblica","Série Noturna","Versículo Dark","Motivacional","Mistério Bíblico","Versículo Dark","Reflexão Profunda","Curiosidade Bíblica","Série Noturna","Versículo Dark","Profecia","Motivacional","Versículo Dark","Reflexão Profunda","Curiosidade Bíblica","Mistério Bíblico","Versículo Dark","Motivacional"];
+const TM = ["19h","12h","19h","12h","19h","10h","20h"];
+const WD = ["SEG","TER","QUA","QUI","SEX","SÁB","DOM"];
+const TC = {
+  "Versículo Dark":      { g:"linear-gradient(135deg,#ff2d55,#bf1942)", t:"#ff2d55", gl:"#ff2d5535", em:"🔥" },
+  "Reflexão Profunda":   { g:"linear-gradient(135deg,#5ac8fa,#2d7dd2)", t:"#5ac8fa", gl:"#5ac8fa35", em:"🧠" },
+  "Curiosidade Bíblica": { g:"linear-gradient(135deg,#bf5af2,#8944c6)", t:"#bf5af2", gl:"#bf5af235", em:"❓" },
+  "Motivacional":        { g:"linear-gradient(135deg,#30d158,#1fa844)", t:"#30d158", gl:"#30d15835", em:"💪" },
+  "Mistério Bíblico":    { g:"linear-gradient(135deg,#ffd60a,#c6a300)", t:"#ffd60a", gl:"#ffd60a35", em:"🔮" },
+  "Profecia":            { g:"linear-gradient(135deg,#ff6482,#d44060)", t:"#ff6482", gl:"#ff648235", em:"⚡" },
+  "Série Noturna":       { g:"linear-gradient(135deg,#7d7aff,#5856d6)", t:"#7d7aff", gl:"#7d7aff35", em:"🌙" },
+};
+
+/* ═══ STORAGE (localStorage) ═══ */
+function load(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+function save(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.warn("save", e); }
+}
+
+/* ═══ API — calls our serverless proxy ═══ */
+async function api(sys, msgs, tools) {
+  const body = { system: sys, messages: msgs };
+  if (tools) body.tools = tools;
+  const r = await fetch("/api/claude", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || `Erro ${r.status}`); }
+  return await r.json();
+}
+
+function extractText(data) {
+  return (data?.content || []).filter(b => b.type === "text").map(b => b.text).join("\n") || "";
+}
+
+async function generateContent(type, dayNum, usedTitles) {
+  const usedStr = usedTitles.length > 0 ? `\nJÁ USADOS (NÃO REPITA): ${usedTitles.join("; ")}` : "";
+  const hints = {
+    "Versículo Dark": "Versículos sombrios e poderosos que causam arrepios. Visual escuro cinematográfico.",
+    "Reflexão Profunda": "Perguntas existenciais pesadas. Tom filosófico e bíblico profundo.",
+    "Curiosidade Bíblica": "Fatos BIZARROS ou DESCONHECIDOS da Bíblia. Clickbait bíblico irresistível.",
+    "Motivacional": "Como se Deus falasse diretamente com a pessoa. Tom urgente e pessoal.",
+    "Mistério Bíblico": "Eventos sobrenaturais inexplicáveis da Bíblia. Atmosfera de mistério.",
+    "Profecia": "Profecias bíblicas que parecem se cumprir AGORA. Senso de urgência.",
+    "Série Noturna": "Conteúdo para antes de dormir. Versículos de paz com tom calmo mas profundo."
+  };
+  const data = await api(
+    `Gerador de conteúdo viral TikTok dark devocional @${U}. Responda SOMENTE com JSON válido, sem markdown, sem backticks. Estrutura: {"titulo":"string","gancho":"string","versiculo":"string","narracao":"string (150-200 palavras)","cta":"string","legenda":"string (com emojis)","hashtags":"string (15 hashtags)","estilo_video":"string","thumbnail":"string","musica":"string","dica_viral":"string"}`,
+    [{ role: "user", content: `DIA ${dayNum}, Tipo:"${type}". ${hints[type]||""} Versículos POUCO CONHECIDOS. Gancho impossível de ignorar.${usedStr}\nApenas JSON.` }]
+  );
+  const raw = extractText(data);
+  if (!raw) throw new Error("Resposta vazia da IA");
+  const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+  try { return JSON.parse(cleaned); } catch {}
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (match) return JSON.parse(match[0]);
+  throw new Error("IA não retornou JSON válido");
+}
+
+async function searchWeb(prompt) {
+  const data = await api(
+    `Analista de TikTok devocional dark. PT-BR, **negrito**, emojis. Específico e prático.`,
+    [{ role: "user", content: prompt }],
+    [{ type: "web_search_20250305", name: "web_search" }]
+  );
+  return extractText(data) || "Sem dados disponíveis.";
+}
+
+async function chatWithAI(msgs) {
+  const data = await api(
+    `Assistente @${U} (TikTok dark devocional). PT-BR, **negrito**, emojis, prático. Pode pesquisar na web.`,
+    msgs,
+    [{ type: "web_search_20250305", name: "web_search" }]
+  );
+  return extractText(data) || "Erro. Tente novamente.";
+}
+
+/* ═══ COMPONENTS ═══ */
+function Ring({ value, max, color, size = 80, sw = 5, children }) {
+  const pct = Math.min(100, max > 0 ? (value / max) * 100 : 0);
+  const r = (size - sw * 2) / 2, c = 2 * Math.PI * r, off = c - (pct / 100) * c;
+  return (
+    <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <svg width={size} height={size} style={{ position: "absolute", transform: "rotate(-90deg)" }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={sw}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={sw}
+          strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round"
+          style={{ transition:"stroke-dashoffset 0.8s ease", filter:`drop-shadow(0 0 6px ${color}60)` }}/>
+      </svg>
+      <div style={{ position:"relative", zIndex:1, textAlign:"center" }}>{children}</div>
+    </div>
+  );
+}
+
+function MD({ text }) {
+  if (!text) return null;
+  return text.split("\n").map((line, i) => {
+    if (line.startsWith("## ")) return <div key={i} style={{ fontSize:"13px", fontWeight:700, color:"#bf5af2", margin:"10px 0 4px", fontFamily:"var(--f1)" }}>{line.slice(3)}</div>;
+    if (line.startsWith("# ")) return <div key={i} style={{ fontSize:"15px", fontWeight:700, color:"#ff2d55", margin:"12px 0 5px", fontFamily:"var(--f1)" }}>{line.slice(2)}</div>;
+    if (!line.trim()) return <div key={i} style={{ height:"6px" }}/>;
+    const parts = []; let rest = line, idx = 0;
+    while (rest.includes("**")) {
+      const s = rest.indexOf("**"), e = rest.indexOf("**", s+2);
+      if (e === -1) break;
+      if (s > 0) parts.push(<span key={idx++}>{rest.slice(0, s)}</span>);
+      parts.push(<strong key={idx++} style={{ color:"#f0e6d3" }}>{rest.slice(s+2, e)}</strong>);
+      rest = rest.slice(e+2);
+    }
+    if (rest) parts.push(<span key={idx++}>{rest}</span>);
+    if (line.match(/^[-•*]\s/)) return <div key={i} style={{ paddingLeft:"16px", margin:"2px 0", position:"relative" }}><span style={{ position:"absolute", left:"4px", color:"#ff2d55" }}>✦</span>{parts.length>1 ? parts : line.replace(/^[-•*]\s/,"")}</div>;
+    return <div key={i} style={{ margin:"2px 0", lineHeight:1.6 }}>{parts.length>1 ? parts : line}</div>;
+  });
+}
+
+function Err({ msg, onRetry }) {
+  return <div style={{ background:"rgba(255,45,85,0.06)", borderRadius:"12px", border:"1px solid rgba(255,45,85,0.15)", padding:"14px", textAlign:"center", marginBottom:"10px" }}>
+    <div style={{ fontSize:"12px", color:"#ff2d55", marginBottom:"8px" }}>⚠️ {msg}</div>
+    {onRetry && <button onClick={onRetry} style={{ padding:"6px 16px", borderRadius:"8px", border:"none", background:"rgba(255,45,85,0.1)", color:"#ff2d55", cursor:"pointer", fontSize:"11px", fontWeight:600 }}>Tentar novamente</button>}
+  </div>;
+}
+
+const CopyBtn = ({ text, id, cp, setCp, small }) => (
+  <button onClick={() => { navigator.clipboard.writeText(text||"").then(() => { setCp(id); setTimeout(()=>setCp(null),2000); }).catch(()=>{}); }}
+    style={{ background:small?"none":cp===id?"rgba(48,209,88,0.08)":"rgba(255,45,85,0.06)", border:small?"none":cp===id?"1px solid rgba(48,209,88,0.2)":"1px solid rgba(255,45,85,0.15)",
+      borderRadius:"8px", padding:small?"2px":"6px 12px", cursor:"pointer", fontSize:small?"9px":"11px", fontWeight:600,
+      color:cp===id?"#30d158":small?"#3d3830":"#ff2d55", display:"flex", alignItems:"center", gap:"4px" }}>
+    {cp===id?"✦ Copiado":small?<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>:"Copiar tudo"}
+  </button>
+);
+
+/* ═══════════════════════════════════════════
+   MAIN APP
+   ═══════════════════════════════════════════ */
+export default function App() {
+  const [tab, setTab] = useState("monitor");
+  const [days, setDays] = useState({});
+  const [genLoad, setGenLoad] = useState(null);
+  const [genError, setGenError] = useState(null);
+  const [openDay, setOpenDay] = useState(null);
+  const [cp, setCp] = useState(null);
+  const [ready, setReady] = useState(false);
+  const [report, setReport] = useState(null);
+  const [monLoad, setMonLoad] = useState(false);
+  const [monErr, setMonErr] = useState(null);
+  const [lastSync, setLastSync] = useState(null);
+  const [stats, setStats] = useState({ followers:0, likes:0, videos:0, views30d:0 });
+  const [editS, setEditS] = useState(false);
+  const [tmpS, setTmpS] = useState({ followers:0, likes:0, videos:0, views30d:0 });
+  const [chat, setChat] = useState([{ role:"assistant", content:`✝ **Painel Sagrado** — @${U}\n\nSou o **Oráculo IA** com **busca web em tempo real**.\n\n- 🔍 **Tendências virais** no TikTok\n- 📊 **Análise de concorrentes**\n- 🎵 **Sons trending**\n- 🎬 **Dicas de edição** CapCut\n- 💰 **Monetização**\n- 📈 **Planos de crescimento**\n\nDigite ou use os atalhos!` }]);
+  const [input, setInput] = useState("");
+  const [chatLoad, setChatLoad] = useState(false);
+  const chatEnd = useRef(null);
+
+  useEffect(() => {
+    const d = load("dv-data", {});
+    if (d.days) setDays(d.days);
+    if (d.stats) { setStats(d.stats); setTmpS(d.stats); }
+    if (d.lastSync) setLastSync(d.lastSync);
+    if (d.report) setReport(d.report);
+    const c = load("dv-chat", null);
+    if (c?.length > 0) setChat(c);
+    setReady(true);
+  }, []);
+
+  useEffect(() => { if (ready) save("dv-data", { days, stats, lastSync, report }); }, [days, stats, lastSync, report, ready]);
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior:"smooth" }); }, [chat, chatLoad]);
+
+  const persistChat = useCallback(m => save("dv-chat", m.slice(-25)), []);
+  const posted = Object.values(days).filter(d=>d?.posted).length;
+  const usedT = Object.values(days).map(d=>d?.titulo).filter(Boolean);
+  const { followers, likes, videos, views30d } = stats;
+  const phase = followers>=10000?"MONETIZAÇÃO":followers>=5000?"ACELERAÇÃO":followers>=1000?"CRESCIMENTO":"DESPERTAR";
+  const phC = followers>=10000?"#30d158":followers>=5000?"#ffd60a":followers>=1000?"#5ac8fa":"#ff2d55";
+
+  const genDay = async dn => {
+    setGenLoad(dn); setGenError(null);
+    try { const type=ROT[(dn-1)%ROT.length]; const r=await generateContent(type,dn,usedT.slice(-12)); setDays(p=>({...p,[dn]:{...r,type,posted:false,dayNum:dn}})); setOpenDay(dn); setTab("day"); }
+    catch(e) { setGenError(`Dia ${dn}: ${e.message}`); }
+    setGenLoad(null);
+  };
+  const regenDay = async dn => {
+    const t=days[dn]?.type||ROT[(dn-1)%ROT.length]; setGenLoad(dn); setGenError(null);
+    try { const r=await generateContent(t,dn,usedT.slice(-12)); setDays(p=>({...p,[dn]:{...r,type:t,posted:p[dn]?.posted||false,dayNum:dn}})); }
+    catch(e) { setGenError(`Dia ${dn}: ${e.message}`); }
+    setGenLoad(null);
+  };
+  const genWeek = async () => { setGenError(null); for(let i=1;i<=7;i++){if(!days[i])await genDay(i);} setTab("calendar"); };
+  const doSync = async p => {
+    setMonLoad(true); setMonErr(null);
+    try { const r=await searchWeb(p||`Busque dados atuais do @${U} no TikTok. Status, nicho devocional dark Brasil, viral agora, 3 recomendações, concorrentes.`); setReport(r); setLastSync(new Date().toISOString()); }
+    catch(e) { setMonErr(e.message); }
+    setMonLoad(false);
+  };
+  const sendMsg = async txt => {
+    if (!txt.trim()||chatLoad) return;
+    const nm=[...chat,{role:"user",content:txt.trim()}]; setChat(nm); setInput(""); setChatLoad(true);
+    try { const reply=await chatWithAI(nm.slice(-10).map(m=>({role:m.role,content:m.content}))); const wr=[...nm,{role:"assistant",content:reply}]; setChat(wr); persistChat(wr); }
+    catch(e) { setChat([...nm,{role:"assistant",content:`⚠️ ${e.message}`}]); }
+    setChatLoad(false);
+  };
+  const fullScript = d => `TÍTULO: ${d.titulo}\nTIPO: ${d.type}\n\n🎯 GANCHO: ${d.gancho}\n📖 VERSÍCULO: ${d.versiculo}\n\n🎙️ NARRAÇÃO:\n${d.narracao}\n\n📢 CTA: ${d.cta}\n\n📱 LEGENDA:\n${d.legenda}\n\n${d.hashtags}\n\n🎬 ${d.estilo_video}\n🖼️ ${d.thumbnail}\n🎵 ${d.musica}\n💡 ${d.dica_viral}`;
+
+  const glass = { background:"rgba(255,255,255,0.025)", borderRadius:"16px", border:"1px solid rgba(255,255,255,0.04)" };
+  const gw = c => ({ position:"absolute", top:0, left:0, right:0, height:"2px", background:`linear-gradient(90deg,transparent,${c},transparent)` });
+
+  if (!ready) return <div style={{ minHeight:"100vh", background:"#08070d", display:"flex", alignItems:"center", justifyContent:"center" }}><div className="sp-lg"/></div>;
+
+  return (
+    <div style={{ "--f1":"'Cinzel',serif", "--f2":"'DM Sans',system-ui,sans-serif", minHeight:"100vh", background:"#08070d", color:"#c8bfa8", fontFamily:"var(--f2)" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+      <div style={{ position:"fixed", top:"-30%", left:"50%", transform:"translateX(-50%)", width:"600px", height:"600px", background:"radial-gradient(ellipse,#ff2d5508,transparent 60%)", pointerEvents:"none" }}/>
+
+      {/* HEADER */}
+      <div style={{ position:"relative", zIndex:2, padding:"14px 14px 0", borderBottom:"1px solid rgba(255,255,255,0.03)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"12px" }}>
+          <div style={{ width:"40px", height:"40px", borderRadius:"11px", background:"linear-gradient(135deg,#ff2d55,#bf5af2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"18px", boxShadow:"0 0 20px #ff2d5525", flexShrink:0 }}>✝</div>
+          <div style={{ flex:1 }}>
+            <h1 style={{ margin:0, fontSize:"17px", fontWeight:700, color:"#f0e6d3", fontFamily:"var(--f1)", letterSpacing:"0.5px" }}>DEVOCIONAL</h1>
+            <div style={{ display:"flex", alignItems:"center", gap:"6px" }}>
+              <span style={{ fontSize:"10px", color:"#4d4538" }}>@{U}</span>
+              <span style={{ width:"4px", height:"4px", borderRadius:"50%", background:phC, boxShadow:`0 0 6px ${phC}` }}/>
+              <span style={{ fontSize:"9px", color:phC, fontWeight:700, letterSpacing:"1px" }}>{phase}</span>
+            </div>
+          </div>
+          <Ring value={followers} max={10000} color="#ff2d55" size={44} sw={3}><div style={{ fontSize:"10px", fontWeight:700, color:"#ff2d55" }}>{followers>=1000?(followers/1000).toFixed(1)+"k":followers}</div></Ring>
+          <Ring value={posted} max={30} color="#bf5af2" size={44} sw={3}><div style={{ fontSize:"10px", fontWeight:700, color:"#bf5af2" }}>{posted}</div></Ring>
+        </div>
+        <div style={{ display:"flex", gap:"1px", overflow:"auto" }}>
+          {[{id:"monitor",l:"📡 MONITOR"},{id:"calendar",l:"⚡ FÁBRICA"},{id:"day",l:"📝 CONTEÚDO"},{id:"ai",l:"🔮 ORÁCULO"}].map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} style={{ padding:"9px 12px", background:"none", border:"none", borderBottom:tab===t.id?"2px solid #ff2d55":"2px solid transparent", color:tab===t.id?"#f0e6d3":"#2d2820", cursor:"pointer", fontSize:"9.5px", fontWeight:700, letterSpacing:"1.2px", fontFamily:"var(--f1)", whiteSpace:"nowrap" }}>{t.l}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ position:"relative", zIndex:2, padding:"14px 14px 100px" }}>
+        {/* MONITOR */}
+        {tab==="monitor"&&<div>
+          <button onClick={()=>doSync()} disabled={monLoad} style={{ width:"100%", padding:"16px", borderRadius:"16px", border:"1px solid rgba(255,45,85,0.15)", background:monLoad?"rgba(255,255,255,0.02)":"linear-gradient(135deg,rgba(255,45,85,0.07),rgba(191,90,242,0.04))", color:"#f0e6d3", fontSize:"14px", fontWeight:600, cursor:monLoad?"wait":"pointer", fontFamily:"var(--f1)", letterSpacing:"0.5px", marginBottom:"14px", boxShadow:monLoad?"none":"0 0 25px rgba(255,45,85,0.06)", opacity:monLoad?0.6:1, display:"flex", alignItems:"center", justifyContent:"center", gap:"10px" }}>
+            {monLoad?<><span className="sp"/> Buscando...</>:"📡 Sincronizar Canal"}
+          </button>
+          <div style={{ display:"flex", gap:"5px", overflow:"auto", marginBottom:"14px", paddingBottom:"3px" }}>
+            {[{l:"🔥 Viral",p:`Viral agora TikTok devocional dark Brasil março 2026. Hashtags, formatos, sons.`},{l:"👥 Rivais",p:`Maiores canais TikTok devocional dark Brasil 2026.`},{l:"📈 Plano",p:`Estratégia 7 dias para @${U} baseada em tendências março 2026.`},{l:"🎵 Sons",p:`Sons trending TikTok Brasil março 2026 conteúdo dark reflexivo.`}].map((a,i)=>(
+              <button key={i} onClick={()=>doSync(a.p)} disabled={monLoad} style={{ padding:"7px 13px", borderRadius:"10px", fontSize:"10.5px", fontWeight:600, border:"1px solid rgba(191,90,242,0.12)", background:"rgba(191,90,242,0.04)", color:"#bf5af2", cursor:monLoad?"wait":"pointer", whiteSpace:"nowrap", opacity:monLoad?0.3:1 }}>{a.l}</button>
+            ))}
+          </div>
+          {/* Stats */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"8px" }}>
+            <span style={{ fontSize:"9px", color:"#3d3830", fontWeight:700, letterSpacing:"1.5px", fontFamily:"var(--f1)" }}>MÉTRICAS</span>
+            <button onClick={()=>{if(editS)setStats({...tmpS});else setTmpS({...stats});setEditS(!editS);}} style={{ padding:"4px 10px", borderRadius:"7px", fontSize:"9px", fontWeight:600, border:"1px solid rgba(255,255,255,0.05)", background:editS?"rgba(48,209,88,0.06)":"rgba(255,255,255,0.02)", color:editS?"#30d158":"#4d4538", cursor:"pointer" }}>{editS?"✦ Salvar":"Editar"}</button>
+          </div>
+          {editS?<div style={{...glass,padding:"14px",marginBottom:"14px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}}>
+            {[{l:"Seguidores",k:"followers"},{l:"Curtidas",k:"likes"},{l:"Vídeos",k:"videos"},{l:"Views 30d",k:"views30d"}].map(f=><div key={f.k}><div style={{fontSize:"9px",color:"#4d4538",marginBottom:"4px",fontFamily:"var(--f1)"}}>{f.l}</div><input type="number" value={tmpS[f.k]} onChange={e=>setTmpS(p=>({...p,[f.k]:Number(e.target.value)||0}))} style={{width:"100%",padding:"8px",borderRadius:"10px",border:"1px solid rgba(255,255,255,0.06)",background:"rgba(255,255,255,0.02)",color:"#f0e6d3",fontSize:"16px",fontWeight:700,outline:"none"}}/></div>)}
+          </div>:<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"14px"}}>
+            {[{l:"Seguidores",v:followers,c:"#ff2d55",g:10000},{l:"Curtidas",v:likes,c:"#bf5af2"},{l:"Vídeos",v:videos,c:"#5ac8fa"},{l:"Views 30d",v:views30d,c:"#ffd60a",g:100000}].map(x=><div key={x.l} style={{...glass,padding:"14px",textAlign:"center",position:"relative",overflow:"hidden"}}><div style={gw(x.c+"40")}/><div style={{fontSize:"24px",fontWeight:700,color:x.c,textShadow:`0 0 20px ${x.c}25`}}>{x.v>=1000?(x.v/1000).toFixed(1)+"k":x.v}</div><div style={{fontSize:"8px",color:"#4d4538",fontFamily:"var(--f1)",letterSpacing:"1px",textTransform:"uppercase"}}>{x.l}</div>{x.g&&<div style={{marginTop:"8px",height:"3px",borderRadius:"2px",background:"rgba(255,255,255,0.03)",overflow:"hidden"}}><div style={{height:"100%",borderRadius:"2px",background:x.c,width:`${Math.min(100,(x.v/x.g)*100)}%`,boxShadow:`0 0 8px ${x.c}40`}}/></div>}</div>)}
+          </div>}
+          {/* Phase */}
+          <div style={{...glass,padding:"18px",marginBottom:"14px",position:"relative",overflow:"hidden"}}><div style={gw(phC)}/><div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}><div><div style={{fontSize:"9px",color:"#4d4538",letterSpacing:"1.5px",fontFamily:"var(--f1)"}}>FASE ATUAL</div><div style={{fontSize:"22px",fontWeight:900,color:phC,fontFamily:"var(--f1)",textShadow:`0 0 25px ${phC}20`}}>{phase}</div></div><Ring value={followers} max={10000} color={phC} size={60} sw={4}><div style={{fontSize:"12px",fontWeight:700,color:phC}}>{Math.min(100,Math.round(followers/100))}%</div></Ring></div><div style={{marginTop:"8px",fontSize:"11px",color:"#6b6358"}}>{followers>=10000?"🎉 Programa disponível!":`Meta: ${(10000-followers).toLocaleString()} seguidores restantes`}</div></div>
+          {monErr&&<Err msg={monErr} onRetry={()=>doSync()}/>}
+          {report&&<div style={{...glass,padding:"16px",position:"relative",overflow:"hidden"}}><div style={gw("#ff2d5540")}/><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}><span style={{fontSize:"9px",color:"#ff2d55",fontWeight:700,fontFamily:"var(--f1)",letterSpacing:"1px"}}>📡 RELATÓRIO</span><CopyBtn text={report} id="mon" cp={cp} setCp={setCp} small/></div><div style={{fontSize:"12px",lineHeight:1.65,color:"#a89d8a"}}><MD text={report}/></div></div>}
+          {!report&&!monLoad&&<div style={{textAlign:"center",padding:"40px"}}><div style={{fontSize:"48px",opacity:0.2}}>📡</div><p style={{fontSize:"12px",color:"#2d2820",fontFamily:"var(--f1)",marginTop:"8px"}}>Toque Sincronizar</p></div>}
+        </div>}
+
+        {/* FACTORY */}
+        {tab==="calendar"&&<div>
+          <h2 style={{margin:"0 0 4px",fontSize:"17px",color:"#f0e6d3",fontFamily:"var(--f1)"}}>⚡ Fábrica de Conteúdo</h2>
+          <p style={{margin:"0 0 12px",fontSize:"11px",color:"#4d4538"}}>IA gera roteiro + legenda + hashtags + estilo — tudo único</p>
+          <button onClick={genWeek} disabled={genLoad!==null} style={{width:"100%",padding:"14px",borderRadius:"14px",border:"1px solid rgba(255,45,85,0.12)",background:"linear-gradient(135deg,rgba(255,45,85,0.06),rgba(191,90,242,0.03))",color:"#f0e6d3",fontSize:"13px",fontWeight:600,cursor:genLoad!==null?"wait":"pointer",fontFamily:"var(--f1)",marginBottom:"12px",opacity:genLoad!==null?0.5:1,display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>{genLoad!==null?<><span className="sp"/> Gerando...</>:"⚡ Gerar semana completa"}</button>
+          {genError&&<Err msg={genError}/>}
+          <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+            {Array.from({length:30},(_,i)=>i+1).map(dn=>{
+              const d=days[dn],type=d?.type||ROT[(dn-1)%ROT.length],tc=TC[type]||TC["Versículo Dark"],isG=genLoad===dn;
+              return <div key={dn} style={{...glass,padding:"12px 14px",display:"flex",gap:"10px",alignItems:"center",opacity:d?.posted?0.3:1,background:d?"rgba(255,255,255,0.03)":"rgba(255,255,255,0.01)"}}>
+                {d&&<button onClick={()=>setDays(p=>({...p,[dn]:{...p[dn],posted:!p[dn]?.posted}}))} style={{width:"28px",height:"28px",borderRadius:"8px",border:d.posted?"2px solid #30d158":"2px solid rgba(255,255,255,0.08)",background:d.posted?"rgba(48,209,88,0.1)":"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#30d158",flexShrink:0,padding:0}}>{d.posted&&<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}</button>}
+                <div style={{flex:1,minWidth:0,cursor:d?"pointer":"default"}} onClick={()=>{if(d){setOpenDay(dn);setTab("day");}}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap",marginBottom:"3px"}}>
+                    <span style={{fontSize:"12px",fontWeight:700,color:"#f0e6d3",fontFamily:"var(--f1)"}}>{WD[(dn-1)%7]} {dn}</span>
+                    <span style={{fontSize:"9px",color:"#2d2820"}}>{TM[(dn-1)%7]}</span>
+                    <span style={{fontSize:"9px",padding:"3px 8px",borderRadius:"6px",background:tc.g,color:"#fff",fontWeight:700,boxShadow:`0 0 10px ${tc.gl}`}}>{tc.em} {type}</span>
+                  </div>
+                  {d?<p style={{margin:0,fontSize:"11.5px",color:d.posted?"#2d2820":"#a89d8a"}}>{d.titulo}</p>:<p style={{margin:0,fontSize:"10px",color:"#1d1a15",fontStyle:"italic"}}>Aguardando</p>}
+                </div>
+                {!d?<button onClick={()=>genDay(dn)} disabled={genLoad!==null} style={{padding:"7px 14px",borderRadius:"10px",border:"none",background:tc.g,color:"#fff",fontSize:"10px",fontWeight:700,cursor:genLoad!==null?"wait":"pointer",boxShadow:`0 0 12px ${tc.gl}`,opacity:genLoad!==null?0.3:1,whiteSpace:"nowrap"}}>{isG?<span className="sp"/>:"Gerar"}</button>
+                :<div style={{display:"flex",gap:"4px",flexShrink:0}}>
+                  <button onClick={e=>{e.stopPropagation();regenDay(dn);}} disabled={genLoad!==null} style={{padding:"6px 8px",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.04)",background:"rgba(255,255,255,0.02)",color:"#6b6358",cursor:genLoad!==null?"wait":"pointer",display:"flex",alignItems:"center",opacity:genLoad!==null?0.2:1}}>{isG?<span className="sp"/>:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>}</button>
+                  <button onClick={()=>{setOpenDay(dn);setTab("day");}} style={{padding:"6px 12px",borderRadius:"8px",border:"none",background:"rgba(255,45,85,0.06)",color:"#ff2d55",cursor:"pointer",fontSize:"10px",fontWeight:700}}>Abrir</button>
+                </div>}
+              </div>;
+            })}
+          </div>
+        </div>}
+
+        {/* DAY DETAIL */}
+        {tab==="day"&&(()=>{
+          const d=days[openDay];
+          if(!d)return<div style={{textAlign:"center",padding:"50px"}}><div style={{fontSize:"48px",opacity:0.2}}>📝</div><p style={{color:"#2d2820",fontFamily:"var(--f1)",fontSize:"13px",marginTop:"10px"}}>Gere conteúdo na Fábrica</p><button onClick={()=>setTab("calendar")} style={{padding:"10px 20px",borderRadius:"10px",border:"none",background:"rgba(255,45,85,0.06)",color:"#ff2d55",cursor:"pointer",fontSize:"12px",fontWeight:600,fontFamily:"var(--f1)",marginTop:"8px"}}>← Fábrica</button></div>;
+          const tc=TC[d.type]||TC["Versículo Dark"];
+          const secs=[{l:"🎯 GANCHO (0-3s)",c:d.gancho,cl:"#ff2d55"},{l:"📖 VERSÍCULO",c:d.versiculo,cl:"#bf5af2"},{l:"🎙️ NARRAÇÃO",c:d.narracao,cl:"#5ac8fa"},{l:"📢 CTA",c:d.cta,cl:"#30d158"},{l:"📱 LEGENDA",c:d.legenda,cl:"#ffd60a"},{l:"# HASHTAGS",c:d.hashtags,cl:"#ff6482"},{l:"🎬 EDIÇÃO",c:d.estilo_video,cl:"#bf5af2"},{l:"🖼️ CAPA",c:d.thumbnail,cl:"#ff6482"},{l:"🎵 MÚSICA",c:d.musica,cl:"#30d158"},{l:"💡 VIRALIZAR",c:d.dica_viral,cl:"#ffd60a"}];
+          return <div>
+            <button onClick={()=>setTab("calendar")} style={{background:"none",border:"none",color:"#ff2d55",fontSize:"11px",cursor:"pointer",fontWeight:700,fontFamily:"var(--f1)",marginBottom:"8px",padding:0}}>← FÁBRICA</button>
+            <div style={{...glass,overflow:"hidden"}}>
+              <div style={{padding:"18px",position:"relative",overflow:"hidden"}}><div style={{position:"absolute",inset:0,background:tc.g,opacity:0.05}}/><div style={{position:"absolute",top:0,left:0,right:0,height:"3px",background:tc.g}}/><div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"8px"}}><div><div style={{display:"flex",gap:"6px",marginBottom:"6px",alignItems:"center"}}><span style={{fontSize:"9px",padding:"3px 10px",borderRadius:"6px",background:tc.g,color:"#fff",fontWeight:700,boxShadow:`0 0 12px ${tc.gl}`}}>{tc.em} DIA {d.dayNum}</span><span style={{fontSize:"9px",color:"#4d4538",fontFamily:"var(--f1)"}}>{d.type}</span></div><h2 style={{margin:0,fontSize:"18px",color:"#f0e6d3",fontFamily:"var(--f1)",lineHeight:1.3}}>{d.titulo}</h2></div><div style={{display:"flex",gap:"5px"}}><button onClick={()=>regenDay(openDay)} disabled={genLoad!==null} style={{padding:"7px 12px",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",background:"rgba(255,255,255,0.02)",color:"#6b6358",cursor:genLoad?"wait":"pointer",fontSize:"11px",fontWeight:600}}>{genLoad===openDay?<span className="sp"/>:"↻ Novo"}</button><CopyBtn text={fullScript(d)} id={`f${d.dayNum}`} cp={cp} setCp={setCp}/></div></div></div>
+              {secs.map((sec,i)=><div key={i} style={{padding:"10px 18px",borderTop:"1px solid rgba(255,255,255,0.02)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"5px"}}><span style={{fontSize:"9px",fontWeight:700,color:sec.cl,letterSpacing:"0.8px",fontFamily:"var(--f1)"}}>{sec.l}</span><CopyBtn text={sec.c||""} id={`s${i}d${d.dayNum}`} cp={cp} setCp={setCp} small/></div><div style={{padding:"10px 12px",borderRadius:"10px",background:`${sec.cl}06`,border:`1px solid ${sec.cl}10`,fontSize:"12.5px",lineHeight:1.6,color:"#a89d8a"}}>{sec.c||"—"}</div></div>)}
+              <div style={{padding:"16px 18px"}}><button onClick={()=>setDays(p=>({...p,[openDay]:{...p[openDay],posted:!p[openDay]?.posted}}))} style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:d.posted?"rgba(48,209,88,0.08)":"linear-gradient(135deg,rgba(255,45,85,0.08),rgba(191,90,242,0.04))",color:d.posted?"#30d158":"#f0e6d3",fontSize:"13px",fontWeight:700,cursor:"pointer",fontFamily:"var(--f1)"}}>{d.posted?"✦ Postado":"Marcar como Postado"}</button></div>
+            </div>
+          </div>;
+        })()}
+
+        {/* AI CHAT */}
+        {tab==="ai"&&<div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
+          <div style={{marginBottom:"8px",flexShrink:0}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"5px"}}>
+              <span style={{fontSize:"9px",color:"#2d2820",fontWeight:700,fontFamily:"var(--f1)",letterSpacing:"1.5px"}}>🔮 ORÁCULO — BUSCA WEB</span>
+              <button onClick={()=>{const m=[{role:"assistant",content:"🔮 Limpo! Pergunte qualquer coisa."}];setChat(m);persistChat(m);}} style={{background:"none",border:"1px solid rgba(255,255,255,0.04)",borderRadius:"6px",padding:"3px 8px",fontSize:"9px",color:"#2d2820",cursor:"pointer"}}>Limpar</button>
+            </div>
+            <div style={{display:"flex",gap:"5px",overflow:"auto",paddingBottom:"4px"}}>
+              {[{l:"🔥 Viral",p:"O que está viral agora TikTok devocional dark Brasil março 2026."},{l:"🎬 CapCut",p:"Tutorial edição dark no CapCut grátis passo a passo."},{l:"💰 Monetizar",p:"Formas de monetizar canal dark devocional TikTok 2026."},{l:"📊 Horários",p:"Melhores horários postar TikTok Brasil nicho religioso 2026."}].map((a,i)=>(
+                <button key={i} onClick={()=>sendMsg(a.p)} disabled={chatLoad} style={{padding:"7px 12px",borderRadius:"10px",fontSize:"10px",fontWeight:600,border:"1px solid rgba(191,90,242,0.1)",background:"rgba(191,90,242,0.03)",color:"#bf5af2",cursor:chatLoad?"wait":"pointer",whiteSpace:"nowrap",opacity:chatLoad?0.3:1}}>{a.l}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:"8px",paddingBottom:"6px"}}>
+            {chat.map((m,i)=><div key={i} style={{alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"94%",position:"relative"}}>
+              {m.role==="assistant"&&<div style={{fontSize:"8px",color:"#2d2820",marginBottom:"3px",fontFamily:"var(--f1)",letterSpacing:"0.5px"}}>🔮 ORÁCULO</div>}
+              <div style={{padding:"12px 14px",borderRadius:m.role==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",background:m.role==="user"?"linear-gradient(135deg,#ff2d55,#bf1942)":"rgba(255,255,255,0.025)",border:m.role==="user"?"none":"1px solid rgba(255,255,255,0.04)",fontSize:"12px",lineHeight:1.6,color:m.role==="user"?"#fff":"#a89d8a",boxShadow:m.role==="user"?"0 4px 15px rgba(255,45,85,0.2)":"none"}}>{m.role==="assistant"?<MD text={m.content}/>:m.content}</div>
+              {m.role==="assistant"&&i>0&&<CopyBtn text={m.content} id={`ch${i}`} cp={cp} setCp={setCp} small/>}
+            </div>)}
+            {chatLoad&&<div style={{alignSelf:"flex-start"}}><div style={{fontSize:"8px",color:"#2d2820",marginBottom:"3px",fontFamily:"var(--f1)"}}>🔮 ORÁCULO</div><div style={{padding:"14px",borderRadius:"14px 14px 14px 4px",background:"rgba(255,255,255,0.025)",border:"1px solid rgba(255,255,255,0.04)"}}><div style={{display:"flex",gap:"5px",alignItems:"center"}}><div className="dot" style={{animationDelay:"0s"}}/><div className="dot" style={{animationDelay:"0.2s"}}/><div className="dot" style={{animationDelay:"0.4s"}}/><span style={{fontSize:"11px",color:"#4d4538",marginLeft:"6px",fontFamily:"var(--f1)"}}>Pesquisando...</span></div></div></div>}
+            <div ref={chatEnd}/>
+          </div>
+          <div style={{flexShrink:0,display:"flex",gap:"8px",paddingTop:"8px",borderTop:"1px solid rgba(255,255,255,0.03)"}}>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg(input);}}} placeholder="Pergunte ao oráculo..." disabled={chatLoad} style={{flex:1,padding:"12px 14px",borderRadius:"12px",border:"1px solid rgba(255,255,255,0.05)",background:"rgba(255,255,255,0.02)",color:"#f0e6d3",fontSize:"13px",outline:"none",fontFamily:"var(--f2)"}}/>
+            <button onClick={()=>sendMsg(input)} disabled={chatLoad||!input.trim()} style={{width:"44px",height:"44px",borderRadius:"12px",border:"none",background:input.trim()&&!chatLoad?"linear-gradient(135deg,#ff2d55,#bf1942)":"rgba(255,255,255,0.02)",cursor:input.trim()&&!chatLoad?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",boxShadow:input.trim()&&!chatLoad?"0 0 20px rgba(255,45,85,0.25)":"none"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+          </div>
+        </div>}
+      </div>
+
+      <style>{`
+        @keyframes pulse{0%,100%{opacity:.2;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .sp{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid rgba(240,230,211,0.2);border-top-color:#f0e6d3;animation:spin .7s linear infinite}
+        .sp-lg{display:inline-block;width:20px;height:20px;border-radius:50%;border:2px solid rgba(240,230,211,0.1);border-top-color:#f0e6d3;animation:spin .8s linear infinite}
+        .dot{width:7px;height:7px;border-radius:50%;background:#ff2d55;animation:pulse 1.2s infinite;box-shadow:0 0 8px #ff2d5540}
+        input::placeholder{color:#2d2820}
+        ::-webkit-scrollbar{width:3px;height:3px}
+        ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.05);border-radius:3px}
+        *{box-sizing:border-box}button{font-family:var(--f2)}
+      `}</style>
+    </div>
+  );
+}
+
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
